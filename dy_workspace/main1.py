@@ -176,7 +176,7 @@ relevant_labels_mapping = {
 # In[3]:
 
 
-vid2features = load_features('/home/camp/FIVR/features/vcms_v1', is_gv=True)
+tem_, tem__, vid2features = load_features('/home/camp/FIVR/features/vcms_v1', is_gv=False)
 
 
 # In[4]:
