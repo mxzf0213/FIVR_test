@@ -234,7 +234,7 @@ for task_name in ['DSVR', 'CSVR', 'ISVR']:
             for __,temp_feature in enumerate(global_feattures):
                 now_similarities = calculate_similarities(query_features, temp_feature)
                 similarities[names[__]] = now_similarities
-            similarities = dict(sorted(similarities.items(),key = lambda k:k[1]))
+            # similarities = dict(sorted(similarities.items(),key = lambda k:k[1]))
             del similarities[query_names[_]]
             results[query_names[_]] = similarities
             if _ == 4:
