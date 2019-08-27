@@ -228,7 +228,7 @@ for task_name in ['DSVR', 'CSVR', 'ISVR']:
         # print(len(query_indexs),query_indexs[0])
         results = dict()
         for _,id in enumerate(query_indexs):
-            print("video id:" + _)
+            print("video id:" + str(_))
             similarities = dict()
             query_features = global_feattures[id]
             for __,temp_feature in enumerate(global_feattures):
