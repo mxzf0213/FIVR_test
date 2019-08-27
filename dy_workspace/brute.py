@@ -237,6 +237,8 @@ for task_name in ['DSVR', 'CSVR', 'ISVR']:
             similarities = dict(sorted(similarities.items(),key = lambda k:k[1]))
             del similarities[query_names[_]]
             results[query_names[_]] = similarities
+            if _ == 4:
+                break
     mAPOffcial, precisions = evaluateOfficial(annotations=gtobj.annotations, results=results,
                                                   relevant_labels=relevant_labels_mapping[task_name],
                                                   dataset=gtobj.dataset,
