@@ -73,7 +73,7 @@ def load_features(dataset_dir, is_gv=True):
             else:
                 cur_arr = g1.get(vid)
                 #print("1:",cur_arr.shape)
-                cur_arr = np.concatenate([cur_arr, np.mean(cur_arr, axis=0, keepdims=True)], axis=0)
+                cur_arr = np.concatenate([cur_arr], axis=0)
                 vid2features[vid] = cur_arr
                 #print(cur_arr.shape)
                 final_vids.extend([vid] * len(cur_arr))
