@@ -204,7 +204,7 @@ print(vids[:10])
 #print(list(vid2features.values())[:2])
 
 # global_features = np.squeeze(np.asarray(list(vid2features.values()), np.float32))
-global_feattures = [np.squeeze(np.asarray(i,np.float32)) for i in list(vid2features.values())]
+global_feattures = [np.asarray(i,np.float32) for i in list(vid2features.values())]
 # print(np.shape(global_features))
 
 
