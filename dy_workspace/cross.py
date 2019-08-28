@@ -1,30 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# # [Fine-grained Incident Video Retrieval (FIVR)](https://arxiv.org/abs/1809.04094)
-# ## Dataset
-# - 数据集特征目录：/home/camp/FIVR/features/vcms_v1
-# - Annotation目录：/home/camp/FIVR/annotation
-# - 描述：我们提供视频的帧级别特征
-#     - 每个h5文件有两个group: images和names
-#     - images group 保存了每个视频帧的特征，id是视频id，value是帧特征
-#     - names group 保存了每个视频帧的名字，id是视频id，value是帧的名字，例如\[1.jpg, 2.jpg,...\]
-# - 一些关键词的解释
-#     - vid: 和视频一一对应。
-#     - name: 和视频一一对应，annotation中的使用的是name
-#     - 通过vid2name和name2vid可以确定他们之间的映射关系
-# - 三种相似的视频
-#     - Duplicate Scene Video (DSV)
-#     - Complementary Scene Video (CSV), 如果A，B两个视频描述的同一个事件，且时间上有overlap，则认为是彼此之间的相似关系是CSV
-#     - Incident Scene Video (ISV)，如果A，B两个视频描述的是同一个时间，时间上没有overlap，则认为彼此之间的相似关系是ISV
-# - 三个任务
-#     - DSVR：负责检索出DSV的相似
-#     - CSVR：负责检索出DSV+CSV的相似
-#     - ISVR：负责检索出DSV+CSV+ISV的相似
-
-# In[1]:
-
-
 import numpy as np
 import os
 import h5py
@@ -36,7 +9,7 @@ import time
 from scipy.spatial.distance import cdist
 from future.utils import viewitems, lrange
 from sklearn.metrics import precision_recall_curve
-import multiprocessing
+
 
 # In[2]:
 
@@ -46,6 +19,7 @@ def read_h5file(path):
     g1 = hf.get('images')
     g2 = hf.get('names')
     return g1.keys(), g1, g2
+
 def load_features(dataset_dir, is_gv=True):
     '''
     加载特征
@@ -55,6 +29,7 @@ def load_features(dataset_dir, is_gv=True):
     '''
     h5_paths = glob(os.path.join(dataset_dir, '*.h5'))
     print(h5_paths)
+    vfeat = {}
     vid2features = {}
     final_vids = []
     features = []
@@ -73,7 +48,10 @@ def load_features(dataset_dir, is_gv=True):
             else:
                 cur_arr = g1.get(vid)
                 #print("1:",cur_arr.shape)
-                cur_arr = np.concatenate([cur_arr], axis=0)
+                #cur_arr = np.concatenate([cur_arr, np.mean(cur_arr, axis=0, keepdims=True)], axis=0)
+                cur_arr = np.asarray(cur_arr)
+                cur_arr_mean = np.mean(cur_arr, axis=0, keepdims=True)
+                vfeat[vid] = cur_arr_mean
                 vid2features[vid] = cur_arr
                 #print(cur_arr.shape)
                 final_vids.extend([vid] * len(cur_arr))
@@ -81,9 +59,30 @@ def load_features(dataset_dir, is_gv=True):
     if is_gv:
         return vid2features
     else:
-        return final_vids, features, vid2features
+        return final_vids, features, vfeat, vid2features
 
-def calculate_similarities(query_features, all_features):
+def calculate_similarities_matrix(query_features, all_features):
+    """
+      用于计算两组特征(已经做过l2-norm)之间的相似度
+      Args:
+        queries: shape: [N, D]
+        features: shape: [M, D]
+      Returns:
+        similarities: shape: [N, M]
+    """
+    similarities = []
+    # 计算待查询视频和所有视频的距离
+    dist = np.nan_to_num(cdist(query_features, all_features, metric='cosine'))
+    for i, v in enumerate(query_features):
+        # 归一化，将距离转化成相似度
+        # sim = np.round(1 - dist[i] / dist[i].max(), decimals=6)
+        sim = 1-dist[i]
+        # 按照相似度的从大到小排列，输出index
+        similarities += [[(s, sim[s]) for s in sim.argsort()[::-1] if not np.isnan(sim[s])]]
+    return similarities
+
+
+def calculate_similarities_dp(query_features, all_features):
     """
       用于计算两组特征(已经做过l2-norm)之间的相似度
       Args:
@@ -100,24 +99,44 @@ def calculate_similarities(query_features, all_features):
     N*M的帧相似度矩阵，防止出现打分交叉
     """
     sim = 1 - dist
+    f = np.zeros((sim.shape[0], sim.shape[1]), dtype=np.float)
     for i in range(sim.shape[0]):
+        max_sim = 0
         for j in range(sim.shape[1]):
-            if i == 0 and j == 0:
-                continue
-            elif i == 0:
-                sim[i][j] += sim[i][j-1]
+            if i == 0:
+                f[i, j] = sim[i, j]
             elif j == 0:
-                sim[i][j] += sim[i-1][j]
+                f[i, j] = sim[i, j]
+                max_sim = f[i-1, j]
             else:
-                sim[i][j] += max(sim[i-1][j-1],sim[i-1][j],sim[i][j-1])
+                max_sim = max(max_sim, f[i-1, j])
+                f[i, j] = max_sim + sim[i, j]
 
-    # for i, v in enumerate(query_features):
-    #     # 归一化，将距离转化成相似度
-    #     # sim = np.round(1 - dist[i] / dist[i].max(), decimals=6)
-    #     sim = 1-dist[i]
-    #     # 按照相似度的从大到小排列，输出index
-    #     similarities += np.max(sim)
-    return np.max(sim)
+    return np.max(f[-1,:])
+
+def calculate_similarities(query_features, all_features):
+    """
+      用于计算两组特征(已经做过l2-norm)之间的相似度
+      Args:
+        queries: shape: [N, D]
+        features: shape: [M, D]
+      Returns:
+        similarities: float
+    """
+    similarities = 0.0
+    # 计算待查询视频和所有视频的距离
+    dist = np.nan_to_num(cdist(query_features, all_features, metric='cosine'))
+    sim_list = []
+    for i, v in enumerate(query_features):
+        # 归一化，将距离转化成相似度
+        # sim = np.round(1 - dist[i] / dist[i].max(), decimals=6)
+        sim = 1-dist[i]
+        # 按照相似度的从大到小排列，输出index
+        similarities += np.max(sim)
+        #sim_list.append(1 + np.max(sim))
+    
+    #return max(sim_list)
+    return similarities
 
 def evaluateOfficial(annotations, results, relevant_labels, dataset, quiet):
     """
@@ -155,8 +174,8 @@ def evaluateOfficial(annotations, results, relevant_labels, dataset, quiet):
                     i += 1.0
                     s += i / ri
         mAP.append(s / len(query_gt))
-        if not quiet:
-            print('Query:{}\t\tAP={:.4f}'.format(query, s / len(query_gt)))
+        #if not quiet:
+        #    print('Query:{}\t\tAP={:.4f}'.format(query, s / len(query_gt)))
 
         # add the dataset videos that are missing from the result file
         missing = len(query_gt) - y_target.count(1)
@@ -192,7 +211,7 @@ relevant_labels_mapping = {
 # In[3]:
 
 
-tem_, tem__, vid2features = load_features('/home/camp/FIVR/features/vcms_v1', is_gv=False)
+tem_, tem__, vfeat, vid2features = load_features('/home/camp/FIVR/features/vcms_v1', is_gv=False)
 
 
 # In[4]:
@@ -201,11 +220,9 @@ tem_, tem__, vid2features = load_features('/home/camp/FIVR/features/vcms_v1', is
 # 加载特征
 vids = list(vid2features.keys())
 print(vids[:10])
-#print(list(vid2features.values())[:2])
 
-# global_features = np.squeeze(np.asarray(list(vid2features.values()), np.float32))
+global_mean_features = np.squeeze(np.asarray(list(vfeat.values()), np.float32))
 global_feattures = [np.asarray(i,np.float32) for i in list(vid2features.values())]
-# print(np.shape(global_features))
 
 
 # In[5]:
@@ -226,7 +243,6 @@ annotation_dir = '/home/camp/FIVR/annotation'
 names = np.asarray([vid2names[vid][0] for vid in vids])
 query_names = None
 results = None
-
 for task_name in ['DSVR', 'CSVR', 'ISVR']:
     annotation_path = os.path.join(annotation_dir, task_name + '.json')
     with open(annotation_path, 'r') as annotation_file:
@@ -243,39 +259,59 @@ for task_name in ['DSVR', 'CSVR', 'ISVR']:
             else:
                 print('skip query: ', query_name)
         # print(len(query_indexs),query_indexs[0])
+        
+        query_features = np.squeeze(global_mean_features[query_indexs])
+        sim_matrix = calculate_similarities_matrix(query_features, global_mean_features)
+        
         results = dict()
-        for _,id in enumerate(query_indexs):
+        for _,id in enumerate(tqdm(query_indexs)):
+            sim_q = sim_matrix[_]
+            topk = 10000
+            
+            gallery_idx = [x[0] for x in sim_q[:topk]]
+
             print("video id:" + str(_))
             similarities = dict()
             query_features = global_feattures[id]
-            for __,temp_feature in enumerate(global_feattures):
+            init_W_q,H_q = query_features.shape
+            W_q = W_q * (W_q - 1) // 2
+            query_2_features = np.zeros((W_q, H_q), np.float32)
+
+            for i in range(init_W_q):
+                for j in range(i+1, init_W_q):
+                    query_2_features[i*init_W_q + j] = (query_features[i] + query_features[j]) / 2
+
+            for idx in gallery_idx:
+                temp_feature = global_feattures[idx]
+                __ = idx
                 now_similarities = calculate_similarities(query_features, temp_feature)
                 similarities[names[__]] = now_similarities
-            # similarities = dict(sorted(similarities.items(),key = lambda k:k[1], reverse= True))
-            del similarities[query_names[_]]
-            results[query_names[_]] = similarities
-            if _ == 4:
-                break
-    mAPOffcial, precisions = evaluateOfficial(annotations=gtobj.annotations, results=results,
-                                              relevant_labels=relevant_labels_mapping[task_name],
-                                              dataset=gtobj.dataset,
-                                              quiet=False)
-        # query_features = np.squeeze(global_features[query_indexs])
 
-        # similarities = calculate_similarities(query_features, global_features)
-        # results = dict()
-    #     for query_idx, query_name in enumerate(query_names):
-    #         cur_sim = similarities[query_idx]
-    #         query_result = dict(
-    #            map(lambda v: (names[v[0]], v[1]), cur_sim)
-    #         )
-    #         del query_result[query_name]
-    #         results[query_name] = query_result
-    # mAPOffcial, precisions = evaluateOfficial(annotations=gtobj.annotations, results=results,
-    #                                          relevant_labels=relevant_labels_mapping[task_name],
-    #                                          dataset=gtobj.dataset,
-    #                                          quiet=False)
+                init_W_q, H_q = temp_feature.shape
+                W_q = W_q * (W_q - 1) // 2
+                temp_2_features = np.zeros((W_q, H_q), np.float32)
+
+                for i in range(init_W_q):
+                    for j in range(i + 1, init_W_q):
+                        temp_2_features[i * init_W_q + j] = (temp_2_features[i] + temp_2_features[j]) / 2
+
+                now_similarities = calculate_similarities(query_2_features, temp_2_features)
+                similarities[names[__]] += now_similarities
+
+            query_result = dict(map(lambda v: (names[v[0]], v[1]), sim_q[topk:]))
+            
+            del similarities[query_names[_]]
+            for key, val in similarities.items():
+                query_result[key] = val
+ 
+            #similarities = dict(sorted(similarities.items(),key = lambda k:k[1], reverse = True))
+            results[query_names[_]] = query_result
+    mAPOffcial, precisions = evaluateOfficial(annotations=gtobj.annotations, results=results,
+                                                  relevant_labels=relevant_labels_mapping[task_name],
+                                                  dataset=gtobj.dataset,
+                                                  quiet=False)
     print('{} mAPOffcial is {}'.format(task_name, np.mean(mAPOffcial)))
 
 
 # In[ ]:
+
